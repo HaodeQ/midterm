@@ -43,16 +43,38 @@ table(duplicated(accid$ACTIVITYNO) == duplicated(accid$DEGREE))
 
 # one way we can eleminate the duplication record is to accumulate the degree of seriousness and number of individuals involved in each incident.
 
+accid$DEGREE%<>% as.character() %>% as.numeric()
+
 uniqueaccid <- accid %>% group_by(ACTIVITYNO)
 
-uniqueaccid$DEGREE %<>% as.character() %>% as.numeric()
+
+test3 <- accid %>% group_by(ACTIVITYNO) %>% filter(DEGREE == 3)
+test2 <- accid %>% group_by(ACTIVITYNO) %>% filter(DEGREE == 2)
+test1 <- accid %>% group_by(ACTIVITYNO) %>% filter(DEGREE == 1)
+
+#fatality
+test1 %<>% summarise(count = n())
+colnames(test1) <- c("ACTIVITYNO", "Fatality")
+
+#hospitality
+test2 %<>% summarise(count = n())
+colnames(test2) <- c("ACTIVITYNO", "Hospitality")
+
+#non-hospitality
+test3 %<>% summarise(count = n())
+colnames(test3) <- c("ACTIVITYNO", "Non-hospitality")
 
 uniqueaccid %<>% summarise(cumulativeDegree = sum(DEGREE), count = n())
+
+#join them one by one
+uniqueaccid <- uniqueaccid %>% left_join(test1, by = "ACTIVITYNO")
+uniqueaccid <- uniqueaccid %>% left_join(test2, by = "ACTIVITYNO")
+uniqueaccid <- uniqueaccid %>% left_join(test3, by = "ACTIVITYNO")
 
 head(uniqueaccid,20)
 uniqueaccid %<>% mutate(averageDegree = round(cumulativeDegree/count,3))
 
-
+uniqueaccid[is.na(uniqueaccid)] <-0
 #just to test to see if we do it correctly
 uniqueaccid[uniqueaccid$ACTIVITYNO == "10096592",]
 
@@ -97,4 +119,110 @@ table(datetest1 == datetest2)
 datetest1 <- ymd(osha$CLOSEDT)
 
 datetest2 <- ymd(osha$CLOSEDATE)
-    
+
+
+oshaaddress <- osha[,c("ACTIVITYNO" , "SITEADD", "SITESTATE", "SITEZIP", "SITECITY", "SITECNTY" ) ]
+
+uniqueaccid %<>% left_join(oshaaddress,by = "ACTIVITYNO")
+
+head(uniqueaccid,30)
+     
+summarise(group_by(uniqueaccid,SITEZIP),count= n())
+
+# may be we can add the city name and county name instead of the encoding
+
+scc <- read.dbf("lookups/scc.dbf")
+
+#by looking at scc and do some googling, the names are city names
+glimpse(scc)
+head(scc)
+
+colnames(scc) <- c("TYPE", "SITESTATE", "SITECNTY", "SITECITY", "NAME")
+
+testname <- scc[,c("SITESTATE","SITECITY","NAME")]
+
+
+uniqueaccid  %<>%  left_join(testname,by = c("SITESTATE","SITECITY"))
+
+head(uniqueaccid)
+
+dangerouscity<-summarise(group_by(uniqueaccid,NAME),incidence = n(), total= sum(count))
+
+arrange(dangerouscity,desc(total))
+
+
+#lets map all incidents
+library(ggmap)
+library(ggplot2)
+
+qmap("masschusettes")
+
+
+
+mapdata <- uniqueaccid[,c("ACTIVITYNO", "count","Fatality","SITESTATE","NAME")]
+
+head(mapdata)
+
+mapdata$EXACT <- paste(mapdata$SITESTATE,mapdata$NAME)
+
+test <- summarise(group_by(mapdata,EXACT), total = sum(count))
+
+ma.location<- geocode(test$EXACT)
+
+# in case we lost the data
+write.table(ma.location, file = "MA_Location")
+x <- read.table("MA_Location")
+head(x)
+
+test$lon <- x$lon
+test$lat <- x$lat
+
+
+mass<- get_map("Masschusetts")
+
+normalize<- test$total
+
+ggmap(mass) +geom_point(aes(x=lon, y=lat), data=test, col="orange", alpha=0.2, size=test$total)
+#lets only concern about fatality.
+
+map_fatality <- summarise(group_by(mapdata,EXACT), total = sum(Fatality))
+
+map_fatality$lon <- x$lon
+map_fatality$lat <- x$lat
+
+ggmap(mass)+geom_point(aes(x=lon, y=lat), data=map_fatality, col="red", alpha=0.2, size=map_fatality$total)
+
+
+
+#testing street level
+
+testinfor <- uniqueaccid[,c( "ACTIVITYNO", "SITEADD", "SITESTATE", "NAME" )]
+
+head(testinfor)
+
+testinfor <- subset(testinfor, testinfor$NAME == "BOSTON")
+
+head(testinfor)
+
+testinfor$EXACT <- paste(testinfor$SITEADD,testinfor$NAME)
+
+head(testinfor)
+
+testinfo <- summarise(group_by(testinfor,EXACT), count = n())
+
+### this piece of code takes some time to run and you may want to just read the file I saved in advance.
+boston_location <- geocode(testinfo$EXACT)
+
+write.table(boston_location, file = "Boston_location")
+###
+
+
+
+bos <- read.table("Boston_location")
+
+testinfo$lon <- bos$lon
+testinfo$lat<- bos$lat
+
+boston <- get_map("Boston", zoom =13)
+
+ggmap(boston) + geom_point(aes(x = lon, y= lat), data = testinfo, col = "red" , alpha = .5 , size = testinfo$count*5) + ggtitle("OSHA accidents in Boston")

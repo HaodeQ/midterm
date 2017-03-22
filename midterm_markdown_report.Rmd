@@ -1,0 +1,243 @@
+---
+title: "Midterm Report"
+author: "Haode Qi"
+date: "March 21, 2017"
+output: pdf_document
+---
+
+
+lets load the library for data cleaning and read relevant data. Since we trying to figure where is the most dangerous places to work in Masschusetts, osha table and accident table will be the most relevant data we need for the purpose.
+
+
+```{r}
+library(foreign)
+library(dplyr)
+library(magrittr)
+library(tidyr)
+
+
+osha <- read.dbf("osha.DBF")
+
+accid<- read.dbf("accid.dbf")
+```
+
+Next step, we need to examine the data along with the documentation provided.
+
+```{r}
+str(accid)
+
+# we can see that there are 2000+ observations
+length(unique(accid$ACTIVITYNO))
+
+# but only 1570 unique observations, we need to look at the duplicated data and see what we can do about it.
+
+#accid$ACTIVITYNO[duplicated(accid$ACTIVITYNO)]
+
+noneunique<- subset(accid, duplicated(accid$ACTIVITYNO) ==TRUE)
+
+# for the first four record, all the entry is exactly the same
+
+head(noneunique,10)
+
+# but if we examine the other record, not all the entries with the same activity number are the same
+# the fact that this may occur because there may be multiple individuals involved in any accident and they are injured in the same exact way
+# we cannot simply removed the duplicated records
+
+# a very important indicator of the seriouness of an accident is the degree. 1 for fatality, 2 for hospitality and 3 for non-hospitalized injury
+# it will probably be worthwhile to see if the same activityno also entails the same degree of seriousness 
+#if they are duplicated in the exact same way, the above statement is true
+
+table(duplicated(accid$ACTIVITYNO) == duplicated(accid$DEGREE))
+
+```
+
+This table tells us that it is not
+
+One way we can eleminate the duplication record is to accumulate the degree of seriousness and number of individuals involved in each incident.
+
+```{r}
+accid$DEGREE%<>% as.character() %>% as.numeric()
+
+uniqueaccid <- accid %>% group_by(ACTIVITYNO)
+
+
+test3 <- accid %>% group_by(ACTIVITYNO) %>% filter(DEGREE == 3)
+test2 <- accid %>% group_by(ACTIVITYNO) %>% filter(DEGREE == 2)
+test1 <- accid %>% group_by(ACTIVITYNO) %>% filter(DEGREE == 1)
+
+#fatality
+test1 %<>% summarise(count = n())
+colnames(test1) <- c("ACTIVITYNO", "Fatality")
+
+#hospitality
+test2 %<>% summarise(count = n())
+colnames(test2) <- c("ACTIVITYNO", "Hospitality")
+
+#non-hospitality
+test3 %<>% summarise(count = n())
+colnames(test3) <- c("ACTIVITYNO", "Non-hospitality")
+
+uniqueaccid %<>% summarise(cumulativeDegree = sum(DEGREE), count = n())
+
+#join them one by one
+uniqueaccid <- uniqueaccid %>% left_join(test1, by = "ACTIVITYNO")
+uniqueaccid <- uniqueaccid %>% left_join(test2, by = "ACTIVITYNO")
+uniqueaccid <- uniqueaccid %>% left_join(test3, by = "ACTIVITYNO")
+
+head(uniqueaccid,20)
+uniqueaccid %<>% mutate(averageDegree = round(cumulativeDegree/count,3))
+
+# the NAs in each type of injury simply means that is zero number of people involved in it. We should replace it with zero.
+uniqueaccid[is.na(uniqueaccid)] <-0
+
+
+#just to test to see if we do it correctly
+uniqueaccid[uniqueaccid$ACTIVITYNO == "10096592",]
+```
+
+now we have the list of unique accidents and the cumulative seriouness and the associated number of individuals involved.
+the address information is stored in osha and we can retrieve the information by matching the activty number
+
+
+In the osha documentation, the following are the address info. States are all MA,  but i prefer to keep state and it become relevant later on in maping.
+SITE STREET		Street Address
+SITE STATE			State Code (alpha postal abbreviation)
+SITE ZIP				United States Postal Zip Code
+SITE CITY CODE	Department of Commerce City Code
+SITE CNTY CODE
+
+
+Since the primary purpose of this ste[] is to retrieve the relevant information, NAs and duplications are no less of a concern here. we will worry about
+it later. Though some of the colnames seems to be overlylong like SITESTATE OR SITEADD, it is necessary to keep them the way it is incase we need to join any information with other table with the same colnames.
+```{r}
+#glimpse(osha)
+
+#we may want to keep the date information. I actually did examine all the different dates avaliable but it is a huge mass in terms of the underlying meaning of each date. If the underlying meaning is not clear, the data becomes irelevant.
+
+#str(osha$OSHA1MOD)
+#str(osha$OPENDATE)
+#str(osha$CLOSEDT)
+#str(osha$CLOSEDT2)
+#str(osha$CLOSEDATE)
+#str(osha$CLOSEDATE2)
+#str(osha$OPENDT)
+
+```
+
+Next, we move on to the address information and match it by activity number.
+```{r}
+oshaaddress <- osha[,c("ACTIVITYNO" , "SITEADD", "SITESTATE", "SITEZIP", "SITECITY", "SITECNTY" ) ]
+
+uniqueaccid %<>% left_join(oshaaddress,by = "ACTIVITYNO")
+
+#just to illustrate some of the things we can do with the cleaned data, the following a frequency table for number of accidents for each zip code.
+summarise(group_by(uniqueaccid,SITEZIP),count= n())
+```
+
+If we look at the lookup database, we can probably retrieve the city name information instead of encoding.
+```{r}
+
+scc <- read.dbf("lookups/scc.dbf")
+
+#by looking at scc and do some googling, the names are indeed city names, since some of the encoding map overlap, it is important to include states.
+glimpse(scc)
+head(scc)
+
+colnames(scc) <- c("TYPE", "SITESTATE", "SITECNTY", "SITECITY", "NAME")
+
+testname <- scc[,c("SITESTATE","SITECITY","NAME")]
+
+
+uniqueaccid  %<>%  left_join(testname,by = c("SITESTATE","SITECITY"))
+
+head(uniqueaccid)
+
+dangerouscity<-summarise(group_by(uniqueaccid,NAME),incidence = n(), total= sum(count))
+
+arrange(dangerouscity,desc(total))
+
+```
+
+Not surprisingly, Boston has the highest number of accidents. Next, we may want to graph the findings in our data. And more intuitively, spatial visualization may be our best option. The following code will plot all the incidents and only the fatalities on two seperate graph.
+
+```{r}
+library(ggmap)
+library(ggplot2)
+
+mapdata <- uniqueaccid[,c("ACTIVITYNO", "count","Fatality","SITESTATE","NAME")]
+
+head(mapdata)
+
+mapdata$EXACT <- paste(mapdata$SITESTATE,mapdata$NAME)
+
+test <- summarise(group_by(mapdata,EXACT), total = sum(count))
+
+### this piece of code allows us to retrieve the longtitude and latitude of the cities. It takes around 20 minutes to run and if you can run it yourself or simply run the file I wrote and saved in the directory.
+
+#ma.location<- geocode(test$EXACT)
+#write.table(ma.location, file = "MA_Location")
+
+###
+
+# in case we lost the data
+
+x <- read.table("MA_Location")
+head(x)
+
+test$lon <- x$lon
+test$lat <- x$lat
+
+
+mass<- get_map("Masschusetts")
+
+
+# rmarkdown has an inherent issue with graphs, and the size of the dot is much larger than it should be. I simply divide the size here by 2 to make
+#the graph more visually appealing
+ggmap(mass) +geom_point(aes(x=lon, y=lat), data=test, col="orange", alpha=0.2, size=(test$total)/2) + ggtitle("Accidents in Mass by city")
+
+#lets only concern about fatality.
+
+map_fatality <- summarise(group_by(mapdata,EXACT), total = sum(Fatality))
+
+map_fatality$lon <- x$lon
+map_fatality$lat <- x$lat
+
+# fatality rate is much lower and ,therefore, the size can be keep as the same.
+ggmap(mass) +geom_point(aes(x=lon, y=lat), data=map_fatality, col="blue", alpha=0.2, size=map_fatality$total) + ggtitle("Fatality in Mass by city")
+```
+
+
+Now we know how exactly does the mapping work. Let's have some fun and graph the accidents in Boston at a street level.
+
+```{r}
+#testing street level
+
+testinfor <- uniqueaccid[,c( "ACTIVITYNO", "SITEADD", "SITESTATE", "NAME" )]
+
+head(testinfor)
+
+testinfor <- subset(testinfor, testinfor$NAME == "BOSTON")
+
+head(testinfor)
+
+testinfor$EXACT <- paste(testinfor$SITEADD,testinfor$NAME)
+
+head(testinfor)
+
+testinfo <- summarise(group_by(testinfor,EXACT), count = n())
+
+###  again this piece of code is for loading data from online and I save a table just to save the time.
+#boston_location <- geocode(testinfo$EXACT)
+
+#write.table(boston_location, file = "Boston_location")
+###
+
+bos <- read.table("Boston_location")
+
+testinfo$lon <- bos$lon
+testinfo$lat<- bos$lat
+
+boston <- get_map("Boston", zoom =13)
+
+ggmap(boston) + geom_point(aes(x = lon, y= lat), data = testinfo, col = "red" , alpha = .5 , size = testinfo$count*5) + ggtitle("OSHA accidents in Boston")
+```
