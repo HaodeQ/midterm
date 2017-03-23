@@ -63,6 +63,7 @@ colnames(test2) <- c("ACTIVITYNO", "Hospitality")
 #non-hospitality
 test3 %<>% summarise(count = n())
 colnames(test3) <- c("ACTIVITYNO", "Non-hospitality")
+uniqueaccid$DEGREE <- as.numeric(as.character(uniqueaccid$DEGREE))
 
 uniqueaccid %<>% summarise(cumulativeDegree = sum(DEGREE), count = n())
 
@@ -128,6 +129,8 @@ uniqueaccid %<>% left_join(oshaaddress,by = "ACTIVITYNO")
 head(uniqueaccid,30)
      
 summarise(group_by(uniqueaccid,SITEZIP),count= n())
+
+
 
 # may be we can add the city name and county name instead of the encoding
 
@@ -226,3 +229,35 @@ testinfo$lat<- bos$lat
 boston <- get_map("Boston", zoom =13)
 
 ggmap(boston) + geom_point(aes(x = lon, y= lat), data = testinfo, col = "red" , alpha = .5 , size = testinfo$count*5) + ggtitle("OSHA accidents in Boston")
+ 
+
+# bar graph for jury types
+
+table(osha$JOBTITLE)
+
+acc<- read.dbf("lookups/acc.dbf")
+
+ok <- subset(acc, acc$CATEGORY == "SOURC-INJ")
+
+unique(ok$VALUE)
+
+accid$SOURCE
+
+head(ok)
+
+colnames(ok) <- c("CATEGORY" ,"SOURCE", "VALUE")
+
+ok$CATEGORY <- NULL
+
+accid_injury<- left_join(accid, ok, by = "SOURCE")
+
+head(accid_injury)
+
+accid_injury<- accid_injury[,c("ACTIVITYNO","VALUE")]
+
+accid_injury<- summarise(group_by(accid_injury,VALUE),count = n())
+
+accid_injury$VALUE <- droplevels(accid_injury$VALUE)
+
+ggplot(data = accid_injury, aes (count, fill = VALUE), ylab = "injury") + geom_bar(width =5) + coord_flip() + ggtitle("Types of injury summary in Mass")
+
